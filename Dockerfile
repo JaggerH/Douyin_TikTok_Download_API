@@ -1,10 +1,14 @@
 # 使用官方 Python 3.11 的轻量版镜像
 FROM python:3.11-slim
 
-LABEL maintainer="Evil0ctal"
+LABEL maintainer="JaggerH"
 
 # 设置非交互模式，避免 Docker 构建时的交互问题
 ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录
 WORKDIR /app
@@ -19,8 +23,5 @@ RUN pip install -i https://mirrors.aliyun.com/pypi/simple/ -U pip \
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 确保启动脚本可执行
-RUN chmod +x start.sh
-
-# 设置容器启动命令
-CMD ["./start.sh"]
+# 直接使用Python启动，避免shell脚本问题
+CMD ["python3", "start.py"]

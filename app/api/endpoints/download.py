@@ -265,3 +265,129 @@ async def download_file_hybrid(request: Request,
         print(e)
         code = 400
         return ErrorResponseModel(code=code, message=str(e), router=request.url.path, params=dict(request.query_params))
+
+
+@router.get("/download_info", summary="获取视频下载信息（仅返回文件路径，不传输文件内容）")
+async def download_info_hybrid(request: Request,
+                               url: str = Query(
+                                   example="https://www.douyin.com/video/7372484719365098803",
+                                   description="视频或图片的URL地址，支持抖音|TikTok|Bilibili的分享链接"),
+                               prefix: bool = True,
+                               with_watermark: bool = False):
+    """
+    获取视频下载信息，仅下载并返回文件路径，不传输文件内容。
+    适用于微服务架构中的文件共享存储场景。
+    """
+    # 是否开启此端点
+    if not config["API"]["Download_Switch"]:
+        code = 400
+        message = "Download endpoint is disabled in the configuration file. | 配置文件中已禁用下载端点。"
+        return ErrorResponseModel(code=code, message=message, router=request.url.path,
+                                  params=dict(request.query_params))
+
+    # 开始解析数据
+    try:
+        data = await HybridCrawler.hybrid_parsing_single_video(url, minimal=True)
+    except Exception as e:
+        code = 400
+        return ErrorResponseModel(code=code, message=str(e), router=request.url.path, params=dict(request.query_params))
+
+    # 开始下载文件
+    try:
+        data_type = data.get('type')
+        platform = data.get('platform')
+        video_id = data.get('video_id')
+        file_prefix = config.get("API").get("Download_File_Prefix") if prefix else ''
+        download_path = os.path.join(config.get("API").get("Download_Path"), f"{platform}_{data_type}")
+
+        # 确保目录存在
+        os.makedirs(download_path, exist_ok=True)
+
+        # 下载视频文件
+        if data_type == 'video':
+            file_name = f"{file_prefix}{platform}_{video_id}.mp4" if not with_watermark else f"{file_prefix}{platform}_{video_id}_watermark.mp4"
+            file_path = os.path.join(download_path, file_name)
+
+            # 判断文件是否存在，存在就直接返回路径信息
+            if os.path.exists(file_path):
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "file_name": file_name,
+                    "platform": platform,
+                    "data_type": data_type,
+                    "video_id": video_id,
+                    "cached": True,
+                    "message": "文件已存在于缓存中",
+                    "video_title": data.get('desc', ''),  # 添加视频标题
+                    "video_info": {  # 添加额外视频信息
+                        "desc": data.get('desc', ''),
+                        "author": data.get('author', {}),
+                        "create_time": data.get('create_time', 0)
+                    }
+                }
+
+            # 获取对应平台的headers
+            if platform == 'tiktok':
+                __headers = await HybridCrawler.TikTokWebCrawler.get_tiktok_headers()
+            elif platform == 'bilibili':
+                __headers = await HybridCrawler.BilibiliWebCrawler.get_bilibili_headers()
+            else:  # douyin
+                __headers = await HybridCrawler.DouyinWebCrawler.get_douyin_headers()
+
+            # Bilibili 特殊处理：音视频分离
+            if platform == 'bilibili':
+                video_data = data.get('video_data', {})
+                video_url = video_data.get('nwm_video_url_HQ') if not with_watermark else video_data.get('wm_video_url_HQ')
+                audio_url = video_data.get('audio_url')
+                if not video_url or not audio_url:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to get video or audio URL from Bilibili"
+                    )
+                
+                # 使用原有的函数合并音视频（包含客户端断开检测）
+                success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
+                if not success:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to merge Bilibili video and audio streams"
+                    )
+            else:
+                # 其他平台的常规处理
+                video_url = data.get('video_data').get('nwm_video_url_HQ') if not with_watermark else data.get('video_data').get('wm_video_url_HQ')
+                success = await fetch_data_stream(video_url, request, headers=__headers, file_path=file_path)
+                if not success:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="An error occurred while fetching data"
+                    )
+
+            # 返回文件路径信息
+            return {
+                "success": True,
+                "file_path": file_path,
+                "file_name": file_name,
+                "platform": platform,
+                "data_type": data_type,
+                "video_id": video_id,
+                "cached": False,
+                "message": "文件下载完成",
+                "video_title": data.get('desc', ''),  # 添加视频标题
+                "video_info": {  # 添加额外视频信息
+                    "desc": data.get('desc', ''),
+                    "author": data.get('author', {}),
+                    "create_time": data.get('create_time', 0)
+                }
+            }
+
+        else:
+            # 暂不支持图片类型的路径返回
+            return ErrorResponseModel(code=400, message="Image type not supported for download_info endpoint", 
+                                      router=request.url.path, params=dict(request.query_params))
+
+    # 异常处理
+    except Exception as e:
+        print(e)
+        code = 400
+        return ErrorResponseModel(code=code, message=str(e), router=request.url.path, params=dict(request.query_params))
