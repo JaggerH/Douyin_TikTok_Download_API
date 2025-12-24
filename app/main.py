@@ -135,6 +135,16 @@ app = FastAPI(
     redoc_url=redoc_url,  # redoc文档路径
 )
 
+# Health check endpoint
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Health check endpoint for container orchestration."""
+    return {
+        "status": "healthy",
+        "service": "video-service",
+        "version": version
+    }
+
 # API router
 app.include_router(api_router, prefix="/api")
 
