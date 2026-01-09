@@ -381,9 +381,64 @@ async def download_info_hybrid(request: Request,
                 }
             }
 
+        # 下载图片文件
+        elif data_type == 'image':
+            # 获取图片URL列表
+            urls = data.get('image_data').get('no_watermark_image_list') if not with_watermark else data.get('image_data').get('watermark_image_list')
+
+            # 下载并保存每张图片
+            image_file_list = []
+            all_cached = True  # 跟踪是否所有图片都已缓存
+
+            for url in urls:
+                index = int(urls.index(url))
+
+                # 构建文件名和路径
+                file_name = f"{file_prefix}{platform}_{video_id}_{index + 1}.jpg"  # 默认jpg
+                file_path = os.path.join(download_path, file_name)
+
+                # 检查文件是否已存在
+                if os.path.exists(file_path):
+                    image_file_list.append(file_path)
+                    continue
+
+                all_cached = False
+
+                # 请求图片文件
+                response = await fetch_data(url)
+                content_type = response.headers.get('content-type')
+                file_format = content_type.split('/')[1] if content_type else 'jpg'
+
+                # 重新构建正确的文件名
+                file_name = f"{file_prefix}{platform}_{video_id}_{index + 1}.{file_format}"
+                file_path = os.path.join(download_path, file_name)
+
+                # 保存文件
+                async with aiofiles.open(file_path, 'wb') as out_file:
+                    await out_file.write(response.content)
+
+                image_file_list.append(file_path)
+
+            # 返回图片路径列表
+            return {
+                "success": True,
+                "data_type": data_type,
+                "image_files": image_file_list,  # 返回图片路径数组而非ZIP
+                "image_count": len(image_file_list),
+                "platform": platform,
+                "video_id": video_id,
+                "cached": all_cached,
+                "message": "图片已存在于缓存中" if all_cached else "图片下载完成",
+                "video_title": data.get('desc', ''),
+                "video_info": {
+                    "desc": data.get('desc', ''),
+                    "author": data.get('author', {}),
+                    "create_time": data.get('create_time', 0)
+                }
+            }
         else:
-            # 暂不支持图片类型的路径返回
-            return ErrorResponseModel(code=400, message="Image type not supported for download_info endpoint", 
+            # 未知类型
+            return ErrorResponseModel(code=400, message=f"Unsupported data type: {data_type}",
                                       router=request.url.path, params=dict(request.query_params))
 
     # 异常处理
