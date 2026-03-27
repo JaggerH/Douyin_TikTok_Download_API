@@ -322,6 +322,13 @@ class BilibiliWebCrawler:
             response = await crawler.fetch_get_json(endpoint)
         return response
 
+    async def update_cookie(self, cookie: str):
+        global config
+        config["TokenManager"]["bilibili"]["headers"]["cookie"] = cookie
+        config_path = f"{path}/config.yaml"
+        with open(config_path, 'w', encoding='utf-8') as file:
+            yaml.dump(config, file, default_flow_style=False, allow_unicode=True, indent=2)
+
     "-------------------------------------------------------main-------------------------------------------------------"
 
     async def main(self):
