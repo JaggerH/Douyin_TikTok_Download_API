@@ -1,4 +1,6 @@
 import asyncio
+import glob
+import json
 import os
 import re
 import subprocess
@@ -8,27 +10,23 @@ import yaml
 
 from crawlers.utils.logger import logger
 
-# 配置文件路径
-path = os.path.abspath(os.path.dirname(__file__))
+_dir = os.path.abspath(os.path.dirname(__file__))
 
-# 读取配置文件
-with open(f"{path}/config.yaml", "r", encoding="utf-8") as f:
+with open(f"{_dir}/config.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 
 class YouTubeWebCrawler:
 
-    # 从配置文件读取 YouTube 请求头
-    async def get_youtube_headers(self):
+    def get_youtube_headers(self):
         yt_config = config['TokenManager']['youtube']
-        kwargs = {
+        return {
             "headers": {
                 "user-agent": yt_config["headers"]["user-agent"],
                 "cookie": yt_config["headers"]["cookie"],
             },
             "proxies": {"http://": yt_config["proxies"]["http"], "https://": yt_config["proxies"]["https"]},
         }
-        return kwargs
 
     def extract_video_id(self, url: str) -> str:
         """从各种 YouTube URL 格式中提取 video ID"""
@@ -74,8 +72,6 @@ class YouTubeWebCrawler:
             logger.warning(f"yt-dlp 字幕获取跳过 ({video_id}): 无 cookies")
             return None
 
-        import glob
-        import json
         work_dir = tempfile.mkdtemp(prefix="yt_subs_")
         cmd = [
             "yt-dlp",
@@ -108,7 +104,8 @@ class YouTubeWebCrawler:
             # 优先选择 json3，其次 vtt
             sub_files.sort(key=lambda f: (0 if f.endswith('.json3') else 1))
             sub_file = sub_files[0]
-            content = open(sub_file, 'r', encoding='utf-8', errors='replace').read()
+            with open(sub_file, 'r', encoding='utf-8', errors='replace') as sf:
+                content = sf.read()
 
             if sub_file.endswith('.json3'):
                 data = json.loads(content)
@@ -162,7 +159,6 @@ class YouTubeWebCrawler:
                 capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
-                import json
                 return json.loads(result.stdout)
             else:
                 logger.warning(f"yt-dlp --dump-json 失败 ({video_id}): {result.stderr[:200]}")
@@ -210,7 +206,7 @@ class YouTubeWebCrawler:
         - Netscape cookies.txt（以 '# Netscape' 开头）→ 直接写入文件
         - 扁平字符串 'key=value; key=value' → 写入 config.yaml（向后兼容）
         """
-        cookies_dir = os.path.join(path, "cookies")
+        cookies_dir = os.path.join(_dir, "cookies")
         os.makedirs(cookies_dir, exist_ok=True)
         cookie_file = os.path.join(cookies_dir, "youtube.txt")
 
@@ -224,14 +220,14 @@ class YouTubeWebCrawler:
             # 扁平字符串，写入 config.yaml（向后兼容）
             global config
             config["TokenManager"]["youtube"]["headers"]["cookie"] = cookie
-            config_path = f"{path}/config.yaml"
+            config_path = f"{_dir}/config.yaml"
             with open(config_path, 'w', encoding='utf-8') as file:
                 yaml.dump(config, file, default_flow_style=False, allow_unicode=True, indent=2)
             logger.info(f"YouTube cookie 已更新 (config.yaml)")
 
     def _get_cookie_file_path(self) -> str | None:
         """获取 Netscape cookies.txt 路径（如果存在）"""
-        cookie_file = os.path.join(path, "cookies", "youtube.txt")
+        cookie_file = os.path.join(_dir, "cookies", "youtube.txt")
         if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 50:
             return cookie_file
         return None
