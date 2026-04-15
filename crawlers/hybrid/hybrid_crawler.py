@@ -39,6 +39,7 @@ from crawlers.douyin.web.web_crawler import DouyinWebCrawler  # 导入抖音Web�
 from crawlers.tiktok.web.web_crawler import TikTokWebCrawler  # 导入TikTok Web爬虫
 from crawlers.tiktok.app.app_crawler import TikTokAPPCrawler  # 导入TikTok App爬虫
 from crawlers.bilibili.web.web_crawler import BilibiliWebCrawler  # 导入Bilibili Web爬虫
+from crawlers.youtube.web_crawler import YouTubeWebCrawler  # 导入YouTube爬虫
 
 
 class HybridCrawler:
@@ -47,6 +48,7 @@ class HybridCrawler:
         self.TikTokWebCrawler = TikTokWebCrawler()
         self.TikTokAPPCrawler = TikTokAPPCrawler()
         self.BilibiliWebCrawler = BilibiliWebCrawler()
+        self.YouTubeWebCrawler = YouTubeWebCrawler()
 
     async def get_bilibili_bv_id(self, url: str) -> str:
         """
@@ -95,6 +97,25 @@ class HybridCrawler:
             data = response.get('data', {})  # 提取data部分
             # Bilibili只有视频类型，aweme_type设为0(video)
             aweme_type = 0
+        # 解析YouTube视频/Parse YouTube video
+        elif "youtube.com" in url or "youtu.be" in url:
+            platform = "youtube"
+            aweme_id = self.YouTubeWebCrawler.extract_video_id(url)
+            # 获取字幕
+            transcript = await self.YouTubeWebCrawler.fetch_transcript(aweme_id)
+            # 获取视频信息
+            video_info = await self.YouTubeWebCrawler.fetch_video_info(aweme_id)
+            data = {
+                "title": video_info.get("title", ""),
+                "description": video_info.get("description", ""),
+                "duration": video_info.get("duration"),
+                "uploader": video_info.get("uploader", ""),
+                "upload_date": video_info.get("upload_date", ""),
+                "view_count": video_info.get("view_count"),
+                "thumbnail": video_info.get("thumbnail", ""),
+                "transcript": transcript,
+            }
+            aweme_type = 0
         else:
             raise ValueError("hybrid_parsing_single_video: Cannot judge the video source from the URL.")
 
@@ -134,7 +155,32 @@ class HybridCrawler:
         """
 
         # 根据平台适配字段映射
-        if platform == 'bilibili':
+        if platform == 'youtube':
+            result_data = {
+                'type': url_type,
+                'platform': platform,
+                'video_id': aweme_id,
+                'desc': data.get("title"),
+                'create_time': data.get("upload_date"),
+                'author': {"nickname": data.get("uploader", "")},
+                'music': None,
+                'statistics': {"view_count": data.get("view_count")},
+                'cover_data': {'cover': data.get("thumbnail")},
+                'hashtags': None,
+                'transcript': data.get("transcript"),
+            }
+            api_data = {
+                'video_data': {
+                    'wm_video_url': None,
+                    'wm_video_url_HQ': None,
+                    'nwm_video_url': None,
+                    'nwm_video_url_HQ': None,
+                    'download_method': 'yt-dlp',
+                }
+            }
+            result_data.update(api_data)
+            return result_data
+        elif platform == 'bilibili':
             result_data = {
                 'type': url_type,
                 'platform': platform,

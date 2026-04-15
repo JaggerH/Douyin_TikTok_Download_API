@@ -181,6 +181,19 @@ async def download_file_hybrid(request: Request,
             if os.path.exists(file_path):
                 return FileResponse(path=file_path, media_type='video/mp4', filename=file_name)
 
+            # YouTube 特殊处理：用 yt-dlp 下载音频
+            if platform == 'youtube':
+                file_name = f"{file_prefix}{platform}_{video_id}.mp3"
+                file_path = os.path.join(download_path, file_name)
+                if os.path.exists(file_path):
+                    return FileResponse(path=file_path, media_type='audio/mpeg', filename=file_name)
+                audio_path = await HybridCrawler.YouTubeWebCrawler.download_audio(video_id, download_path)
+                if not audio_path:
+                    raise HTTPException(status_code=500, detail="Failed to download YouTube audio via yt-dlp")
+                if audio_path != file_path:
+                    os.rename(audio_path, file_path)
+                return FileResponse(path=file_path, media_type='audio/mpeg', filename=file_name)
+
             # 获取对应平台的headers
             if platform == 'tiktok':
                 __headers = await HybridCrawler.TikTokWebCrawler.get_tiktok_headers()
@@ -199,7 +212,7 @@ async def download_file_hybrid(request: Request,
                         status_code=500,
                         detail="Failed to get video or audio URL from Bilibili"
                     )
-                
+
                 # 使用专门的函数合并音视频
                 success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
                 if not success:
@@ -327,6 +340,33 @@ async def download_info_hybrid(request: Request,
                     }
                 }
 
+            # YouTube 特殊处理：用 yt-dlp 下载音频
+            if platform == 'youtube':
+                file_name = f"{file_prefix}{platform}_{video_id}.mp3"
+                file_path = os.path.join(download_path, file_name)
+                if not os.path.exists(file_path):
+                    audio_path = await HybridCrawler.YouTubeWebCrawler.download_audio(video_id, download_path)
+                    if not audio_path:
+                        raise HTTPException(status_code=500, detail="Failed to download YouTube audio via yt-dlp")
+                    if audio_path != file_path:
+                        os.rename(audio_path, file_path)
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "file_name": file_name,
+                    "platform": platform,
+                    "data_type": "audio",
+                    "video_id": video_id,
+                    "cached": os.path.exists(file_path),
+                    "message": "YouTube 音频下载完成",
+                    "video_title": data.get('desc', ''),
+                    "video_info": {
+                        "desc": data.get('desc', ''),
+                        "author": data.get('author', {}),
+                        "create_time": data.get('create_time', 0)
+                    }
+                }
+
             # 获取对应平台的headers
             if platform == 'tiktok':
                 __headers = await HybridCrawler.TikTokWebCrawler.get_tiktok_headers()
@@ -345,7 +385,7 @@ async def download_info_hybrid(request: Request,
                         status_code=500,
                         detail="Failed to get video or audio URL from Bilibili"
                     )
-                
+
                 # 使用原有的函数合并音视频（包含客户端断开检测）
                 success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
                 if not success:

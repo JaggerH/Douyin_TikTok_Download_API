@@ -105,8 +105,15 @@ async def update_cookie_api(request: Request,
             return ResponseModel(code=200,
                                 router=request.url.path,
                                 data={"message": f"Cookie for {service} updated successfully"})
+        elif service == "youtube":
+            from crawlers.youtube.web_crawler import YouTubeWebCrawler
+            youtube_crawler = YouTubeWebCrawler()
+            await youtube_crawler.update_cookie(cookie)
+            return ResponseModel(code=200,
+                                router=request.url.path,
+                                data={"message": f"Cookie for {service} updated successfully"})
         else:
-            raise ValueError(f"Service '{service}' is not supported. Supported services: douyin, tiktok, bilibili")
+            raise ValueError(f"Service '{service}' is not supported. Supported services: douyin, tiktok, bilibili, youtube")
     except Exception as e:
         status_code = 400
         detail = ErrorResponseModel(code=status_code,
