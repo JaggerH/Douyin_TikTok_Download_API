@@ -11,6 +11,7 @@ from starlette.responses import FileResponse
 
 from app.api.models.APIResponseModel import ErrorResponseModel  # 导入响应模型
 from crawlers.hybrid.hybrid_crawler import HybridCrawler  # 导入混合数据爬虫
+from crawlers.utils.cookie_refresher import get_refresher
 
 router = APIRouter()
 HybridCrawler = HybridCrawler()
@@ -61,10 +62,10 @@ async def merge_bilibili_video_audio(video_url: str, audio_url: str, request: Re
         with tempfile.NamedTemporaryFile(suffix='.m4a', delete=False) as audio_temp:
             audio_temp_path = audio_temp.name
         
-        # 下载视频流
-        video_success = await fetch_data_stream(video_url, request, headers=headers, file_path=video_temp_path)
+        # 下载视频流（headers 已经是内层 dict，包装成 fetch_data_stream 期望的格式）
+        video_success = await fetch_data_stream(video_url, request, headers={"headers": headers}, file_path=video_temp_path)
         # 下载音频流
-        audio_success = await fetch_data_stream(audio_url, request, headers=headers, file_path=audio_temp_path)
+        audio_success = await fetch_data_stream(audio_url, request, headers={"headers": headers}, file_path=audio_temp_path)
         
         if not video_success or not audio_success:
             print("Failed to download video or audio stream")
@@ -215,6 +216,16 @@ async def download_file_hybrid(request: Request,
 
                 # 使用专门的函数合并音视频
                 success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
+                if not success:
+                    # Cookie 可能过期 — 主动从 CookieCloud 刷新后重试一次
+                    refreshed = await get_refresher().refresh("bilibili", HybridCrawler.BilibiliWebCrawler)
+                    if refreshed:
+                        data = await HybridCrawler.hybrid_parsing_single_video(url, minimal=True)
+                        video_data = data.get('video_data', {})
+                        video_url = video_data.get('nwm_video_url_HQ') if not with_watermark else video_data.get('wm_video_url_HQ')
+                        audio_url = video_data.get('audio_url')
+                        __headers = await HybridCrawler.BilibiliWebCrawler.get_bilibili_headers()
+                        success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
                 if not success:
                     raise HTTPException(
                         status_code=500,
@@ -388,6 +399,16 @@ async def download_info_hybrid(request: Request,
 
                 # 使用原有的函数合并音视频（包含客户端断开检测）
                 success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
+                if not success:
+                    # Cookie 可能过期 — 主动从 CookieCloud 刷新后重试一次
+                    refreshed = await get_refresher().refresh("bilibili", HybridCrawler.BilibiliWebCrawler)
+                    if refreshed:
+                        data = await HybridCrawler.hybrid_parsing_single_video(url, minimal=True)
+                        video_data = data.get('video_data', {})
+                        video_url = video_data.get('nwm_video_url_HQ') if not with_watermark else video_data.get('wm_video_url_HQ')
+                        audio_url = video_data.get('audio_url')
+                        __headers = await HybridCrawler.BilibiliWebCrawler.get_bilibili_headers()
+                        success = await merge_bilibili_video_audio(video_url, audio_url, request, file_path, __headers.get('headers'))
                 if not success:
                     raise HTTPException(
                         status_code=500,
