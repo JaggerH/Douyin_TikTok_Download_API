@@ -9,6 +9,9 @@ import tempfile
 import yaml
 
 from crawlers.utils.logger import logger
+from crawlers.utils.cookie_refresher import get_refresher
+
+_BOT_DETECTION_PHRASES = ("Sign in to confirm", "bot", "not a bot", "confirm you're not")
 
 _dir = os.path.abspath(os.path.dirname(__file__))
 
@@ -94,6 +97,25 @@ class YouTubeWebCrawler:
             # 即使 returncode != 0，字幕文件可能已下载成功（format 错误不影响字幕）
             if result.returncode != 0:
                 logger.warning(f"yt-dlp --write-subs 退出码 {result.returncode} ({video_id}): {result.stderr[:200]}")
+                # Bot detection — refresh cookies and retry once
+                if self._is_bot_detection_error(result.stderr):
+                    logger.warning(f"YouTube bot detection on subtitles {video_id}, refreshing cookies...")
+                    refreshed = await self._refresh_cookies_from_cloud()
+                    if refreshed:
+                        new_cookie_path = self._get_cookie_file_path()
+                        retry_cmd = list(cmd)
+                        if new_cookie_path:
+                            try:
+                                ci = retry_cmd.index("--cookies")
+                                retry_cmd[ci + 1] = new_cookie_path
+                            except ValueError:
+                                retry_cmd.extend(["--cookies", new_cookie_path])
+                        result = await asyncio.to_thread(
+                            subprocess.run, retry_cmd,
+                            capture_output=True, text=True, timeout=120
+                        )
+                        if result.returncode != 0:
+                            logger.warning(f"yt-dlp --write-subs 重试失败 ({video_id}): {result.stderr[:200]}")
 
             # 查找下载的字幕文件
             sub_files = glob.glob(os.path.join(work_dir, f"{video_id}.*"))
@@ -183,14 +205,43 @@ class YouTubeWebCrawler:
             cmd.extend(["--cookies", cookie_path])
         cmd.append(f"https://www.youtube.com/watch?v={video_id}")
 
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run, cmd,
+        async def _run_download(cookie_path_override=None):
+            _cmd = list(cmd)
+            # Replace --cookies arg if refreshed path provided
+            if cookie_path_override is not None:
+                try:
+                    ci = _cmd.index("--cookies")
+                    _cmd[ci + 1] = cookie_path_override
+                except ValueError:
+                    _cmd.extend(["--cookies", cookie_path_override])
+            return await asyncio.to_thread(
+                subprocess.run, _cmd,
                 capture_output=True, text=True, timeout=300
             )
+
+        try:
+            result = await _run_download()
             if result.returncode != 0:
                 logger.error(f"yt-dlp 音频下载失败 ({video_id}): {result.stderr[:300]}")
-                return None
+                # Bot detection — try refreshing cookies and retry once
+                if self._is_bot_detection_error(result.stderr):
+                    logger.warning(f"YouTube bot detection on {video_id}, refreshing cookies from CookieCloud...")
+                    refreshed = await self._refresh_cookies_from_cloud()
+                    if refreshed:
+                        new_cookie_path = self._get_cookie_file_path()
+                        result = await _run_download(cookie_path_override=new_cookie_path)
+                        if result.returncode == 0:
+                            logger.info(f"yt-dlp 音频下载重试成功 ({video_id})")
+                        else:
+                            logger.error(f"yt-dlp 音频下载重试失败 ({video_id}): {result.stderr[:300]}")
+                            return None
+                    else:
+                        raise RuntimeError(
+                            "YouTube cookies 失效且无法从 CookieCloud 刷新，"
+                            "请打开 YouTube 页面让 CookieCloud 扩展同步最新 cookies"
+                        )
+                else:
+                    return None
 
             # 查找生成的文件
             for f in os.listdir(output_dir):
@@ -200,6 +251,43 @@ class YouTubeWebCrawler:
         except Exception as e:
             logger.error(f"yt-dlp 音频下载异常 ({video_id}): {e}")
             return None
+
+    def _is_bot_detection_error(self, stderr: str) -> bool:
+        """Return True if yt-dlp stderr indicates YouTube bot detection."""
+        return any(phrase.lower() in stderr.lower() for phrase in _BOT_DETECTION_PHRASES)
+
+    async def _refresh_cookies_from_cloud(self) -> bool:
+        """Pull fresh YouTube cookies from CookieCloud and write cookies.txt.
+
+        Returns True on success, False if CookieCloud is unavailable or failed.
+        """
+        refresher = get_refresher()
+        if not refresher.available:
+            return False
+        try:
+            yt_cookies = refresher.fetch_domain_cookies("youtube.com")
+            google_cookies: dict[str, str] = {}
+            try:
+                google_cookies = refresher.fetch_domain_cookies("google.com")
+            except Exception:
+                pass  # google.com cookies optional
+
+            netscape_lines = ["# Netscape HTTP Cookie File", "# Generated by CookieRefresher", ""]
+            # youtube.com cookies → .youtube.com domain
+            for name, value in yt_cookies.items():
+                netscape_lines.append(f".youtube.com\tTRUE\t/\tFALSE\t2147483647\t{name}\t{value}")
+            # google.com auth cookies → .google.com domain (yt-dlp needs these for auth handshake)
+            for name, value in google_cookies.items():
+                netscape_lines.append(f".google.com\tTRUE\t/\tFALSE\t2147483647\t{name}\t{value}")
+
+            cookie_content = "\n".join(netscape_lines) + "\n"
+            await self.update_cookie(cookie_content)
+            total = len(yt_cookies) + len(google_cookies)
+            logger.info(f"YouTube cookies refreshed from CookieCloud ({len(yt_cookies)} youtube + {len(google_cookies)} google = {total} total)")
+            return True
+        except Exception as exc:
+            logger.error(f"YouTube CookieCloud refresh failed: {exc}")
+            return False
 
     async def update_cookie(self, cookie: str):
         """更新 YouTube cookies。支持两种格式：

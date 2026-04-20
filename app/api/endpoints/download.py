@@ -109,6 +109,44 @@ async def merge_bilibili_video_audio(video_url: str, audio_url: str, request: Re
         print(f"Error merging video and audio: {e}")
         return False
 
+@router.post("/refresh-cookies", summary="手动从 CookieCloud 刷新 YouTube cookies")
+async def refresh_youtube_cookies(request: Request):
+    """
+    从 CookieCloud 拉取最新 YouTube cookies 并写入 cookies.txt。
+    在 bot detection 时可手动调用，也可由外部 skill/脚本触发。
+    """
+    refresher = get_refresher()
+    if not refresher.available:
+        return {"success": False, "message": "CookieCloud not configured (missing env vars)"}
+    try:
+        yt_cookies = refresher.fetch_domain_cookies("youtube.com")
+        google_cookies: dict = {}
+        try:
+            google_cookies = refresher.fetch_domain_cookies("google.com")
+        except Exception:
+            pass
+
+        import os as _os
+        cookie_file = _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))),
+            "crawlers", "youtube", "cookies", "youtube.txt"
+        )
+        netscape_lines = ["# Netscape HTTP Cookie File", "# Refreshed via /api/refresh-cookies", ""]
+        for name, value in yt_cookies.items():
+            netscape_lines.append(f".youtube.com\tTRUE\t/\tFALSE\t2147483647\t{name}\t{value}")
+        for name, value in google_cookies.items():
+            netscape_lines.append(f".google.com\tTRUE\t/\tFALSE\t2147483647\t{name}\t{value}")
+        cookie_content = "\n".join(netscape_lines) + "\n"
+
+        _os.makedirs(_os.path.dirname(cookie_file), exist_ok=True)
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            f.write(cookie_content)
+        total = len(yt_cookies) + len(google_cookies)
+        return {"success": True, "message": f"YouTube cookies refreshed ({len(yt_cookies)} youtube + {len(google_cookies)} google = {total} total)", "cookie_file": cookie_file}
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+
+
 @router.get("/download", summary="在线下载抖音|TikTok|Bilibili视频/图片/Online download Douyin|TikTok|Bilibili video/image")
 async def download_file_hybrid(request: Request,
                                url: str = Query(
